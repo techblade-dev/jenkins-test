@@ -95,26 +95,93 @@ function shouldPostForBranch(branches, remoteRef) {
   return false;
 }
 
-/** GET card so we use the real id; comment POST wants form body per Trello docs. */
-async function getCardId(key, token, shortOrLong) {
+/** Walk board cards (same as commit validation) when direct GET /cards/{short} returns 404. */
+async function findCardIdOnBoards(key, token, shortLinkNorm) {
+  const boardsRaw = (process.env.TRELLO_BOARD_ID || "").trim();
+  if (!boardsRaw) {
+    return null;
+  }
+  const want = shortLinkNorm.toLowerCase();
+  for (const bid of boardsRaw
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean)) {
+    let before = undefined;
+    for (;;) {
+      const u = new URL(
+        `https://api.trello.com/1/boards/${encodeURIComponent(bid)}/cards`,
+      );
+      u.searchParams.set("key", key);
+      u.searchParams.set("token", token);
+      u.searchParams.set("fields", "id,shortLink");
+      u.searchParams.set("filter", "all");
+      u.searchParams.set("limit", "1000");
+      if (before) u.searchParams.set("before", before);
+      const res = await fetch(u);
+      const body = await res.text();
+      if (!res.ok) {
+        dbg("board cards", bid, res.status, body.slice(0, 120));
+        break;
+      }
+      const cards = JSON.parse(body);
+      if (!Array.isArray(cards) || cards.length === 0) {
+        break;
+      }
+      for (const c of cards) {
+        if (
+          c &&
+          typeof c.shortLink === "string" &&
+          c.shortLink.toLowerCase() === want
+        ) {
+          return c.id;
+        }
+      }
+      if (cards.length < 1000) {
+        break;
+      }
+      before = cards[cards.length - 1].id;
+    }
+  }
+  return null;
+}
+
+/** GET card by short link; on 404, resolve via TRELLO_BOARD_ID card list. */
+async function getCardId(key, token, shortFromCommit) {
+  const short = shortFromCommit.trim();
   const u = new URL(
-    `https://api.trello.com/1/cards/${encodeURIComponent(shortOrLong)}`,
+    `https://api.trello.com/1/cards/${encodeURIComponent(short)}`,
   );
   u.searchParams.set("key", key);
   u.searchParams.set("token", token);
   u.searchParams.set("fields", "id,shortLink");
   const res = await fetch(u);
   const body = await res.text();
-  if (!res.ok) {
+  if (res.ok) {
+    const j = JSON.parse(body);
+    if (j?.id) {
+      return j.id;
+    }
+  }
+  if (res.status === 404) {
+    dbg("direct card GET 404, scanning TRELLO_BOARD_ID for shortLink", short);
+    const fromBoard = await findCardIdOnBoards(key, token, short);
+    if (fromBoard) {
+      return fromBoard;
+    }
     throw new Error(
-      `Trello get card ${res.status} ${shortOrLong}: ${body.slice(0, 200)}`,
+      `Trello: card "${short}" not found via API and not on board(s) TRELLO_BOARD_ID. Use the XXXXXXXX from your card URL (trello.com/c/XXXXXXXX/…), and set TRELLO_BOARD_ID to that card's board.`,
     );
   }
-  const j = JSON.parse(body);
-  if (!j || !j.id) {
+  if (!res.ok) {
+    throw new Error(
+      `Trello get card ${res.status} ${short}: ${body.slice(0, 200)}`,
+    );
+  }
+  const j2 = JSON.parse(body);
+  if (!j2?.id) {
     throw new Error("Trello get card: missing id in response");
   }
-  return j.id;
+  return j2.id;
 }
 
 async function addCommentToCard(key, token, shortLink, text) {
