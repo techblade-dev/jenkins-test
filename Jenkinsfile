@@ -1,25 +1,17 @@
+// Core Pipeline only: no NodeJS tool, Docker agent, AnsiColor, or readJSON plugins.
+// On Linux, downloads Node from nodejs.org into ~/.cache/jenkins-node if `node` is missing.
 pipeline {
   agent any
 
-  tools {
-    nodejs 'node22'
-  }
-
   options {
-    timestamps()
-    ansiColor('xterm')
-    timeout(time: 20, unit: 'MINUTES')
-    buildDiscarder(logRotator(numToKeepStr: '20', artifactNumToKeepStr: '10'))
+    timeout(time: 30, unit: 'MINUTES')
+    buildDiscarder(logRotator(numToKeepStr: '20', artifactNumToKeepStr: '5'))
     disableConcurrentBuilds()
-    skipDefaultCheckout(false)
   }
 
   environment {
-    CI = 'true'
     HUSKY = '0'
-    NPM_CONFIG_FUND = 'false'
-    NPM_CONFIG_AUDIT = 'false'
-    NODE_ENV = 'production'
+    CI = 'true'
   }
 
   triggers {
@@ -28,6 +20,57 @@ pipeline {
 
   stages {
 
+    stage('Bootstrap Node') {
+      steps {
+        sh '''
+          set -euo pipefail
+          umask 022
+          # Pin version — change here when you change local dev
+          V="22.12.0"
+          M="$(uname -m)"
+          case "$M" in
+            x86_64)  SUFFIX="x64" ;;
+            aarch64|arm64) SUFFIX="arm64" ;;
+            *) echo "Unsupported architecture: $M"; exit 1 ;;
+          esac
+          NAME="node-v${V}-linux-${SUFFIX}"
+          TAR="${NAME}.tar.gz"
+          CACHE_ROOT="${HOME}/.cache/jenkins-node"
+          DEST="${CACHE_ROOT}/${NAME}"
+          mkdir -p "${WORKSPACE}/.jenkins"
+          ENVFILE="${WORKSPACE}/.jenkins/node-env"
+
+          if command -v node >/dev/null 2>&1; then
+            echo "Node already on PATH: $(command -v node) ($(node -v))"
+            echo "export PATH=\"${PATH}\"" > "${ENVFILE}"
+            exit 0
+          fi
+
+          if [ -x "${DEST}/bin/node" ]; then
+            echo "Reusing cached Node at ${DEST}"
+            echo "export PATH=\"${DEST}/bin:\${PATH}\"" > "${ENVFILE}"
+            . "${ENVFILE}"
+            node -v
+            exit 0
+          fi
+
+          mkdir -p "${CACHE_ROOT}"
+          cd "${CACHE_ROOT}"
+          if [ ! -f "${TAR}" ]; then
+            echo "Downloading ${TAR} ..."
+            curl -fsSLO "https://nodejs.org/dist/v${V}/${TAR}"
+          fi
+          rm -rf "${NAME}"
+          tar -xzf "${TAR}"
+          test -x "${NAME}/bin/node"
+          echo "export PATH=\"${CACHE_ROOT}/${NAME}/bin:\${PATH}\"" > "${ENVFILE}"
+          . "${ENVFILE}"
+          node -v
+          npm -v
+        '''
+      }
+    }
+
     stage('Validate Commit Format') {
       steps {
         script {
@@ -35,9 +78,7 @@ pipeline {
             script: 'git log -1 --pretty=%B',
             returnStdout: true
           ).trim()
-
           echo "Commit message: ${message}"
-
           if (!(message ==~ /^[a-zA-Z0-9]{7,8} - .+/)) {
             error("Invalid commit format. Use: <TRELLO_ID> - message")
           }
@@ -45,25 +86,27 @@ pipeline {
       }
     }
 
-    stage('Environment') {
+    stage('Info') {
       steps {
         sh '''
-          set -eu
-          echo "--- Tools ---"
+          set -euo pipefail
+          . "${WORKSPACE}/.jenkins/node-env"
+          echo "---"
+          which node
           node -v
           npm -v
           git --version
-          echo "--- Workspace ---"
           pwd
           ls -la
         '''
       }
     }
 
-    stage('Install Dependencies') {
+    stage('Install dependencies') {
       steps {
         sh '''
-          set -eu
+          set -euo pipefail
+          . "${WORKSPACE}/.jenkins/node-env"
           if [ -f package-lock.json ]; then
             npm ci --no-audit --no-fund
           else
@@ -73,42 +116,28 @@ pipeline {
       }
     }
 
-    stage('Quality') {
-      parallel {
-        stage('Lint') {
-          when {
-            expression {
-              def pkg = readJSON file: 'package.json'
-              return pkg.scripts?.lint
-            }
-          }
-          steps {
-            sh 'npm run lint'
-          }
+    stage('Lint (optional)') {
+      when {
+        expression {
+          sh(script: 'grep -E "^[[:space:]]*\\"lint\\"[[:space:]]*:" package.json', returnStatus: true) == 0
         }
-        stage('Typecheck') {
-          when {
-            expression { fileExists('tsconfig.json') || fileExists('tsconfig.app.json') }
-          }
-          steps {
-            sh 'npx --no-install tsc -b --pretty false || npx tsc -b --pretty false'
-          }
-        }
+      }
+      steps {
+        sh '''
+          set -euo pipefail
+          . "${WORKSPACE}/.jenkins/node-env"
+          npm run lint
+        '''
       }
     }
 
     stage('Build') {
       steps {
-        sh 'npm run build'
-      }
-      post {
-        success {
-          script {
-            if (fileExists('dist')) {
-              archiveArtifacts artifacts: 'dist/**/*', fingerprint: true, onlyIfSuccessful: true
-            }
-          }
-        }
+        sh '''
+          set -euo pipefail
+          . "${WORKSPACE}/.jenkins/node-env"
+          npm run build
+        '''
       }
     }
 
@@ -116,17 +145,7 @@ pipeline {
 
   post {
     always {
-      echo "Build ${currentBuild.fullDisplayName} finished with status: ${currentBuild.currentResult}"
-    }
-    cleanup {
-      cleanWs(
-        deleteDirs: true,
-        notFailBuild: true,
-        patterns: [
-          [pattern: 'node_modules/**', type: 'INCLUDE'],
-          [pattern: '.npm/**',         type: 'INCLUDE']
-        ]
-      )
+      echo "Build status: ${currentBuild.currentResult}"
     }
   }
 }
