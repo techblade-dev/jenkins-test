@@ -8,7 +8,8 @@
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "prepare": "husky"
+    "prepare": "husky",
+    "validate:commit": "node scripts/validate-commit-trello.mjs"
   },
   "dependencies": {
     "react": "^19.2.5",
