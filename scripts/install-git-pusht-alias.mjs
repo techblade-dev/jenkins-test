@@ -10,11 +10,15 @@ const aliasValue =
   '!f(){ command git push "$@"; t=$?; [ $t -ne 0 ] && exit $t; d="$(command git rev-parse --show-toplevel 2>/dev/null)"; [ -n "$d" ] && node "$d/scripts/after-git-push.mjs"; exit 0; }; f';
 
 try {
-  execFileSync("git", ["config", "--local", "alias.pusht", aliasValue], { cwd: root });
+  execFileSync("git", ["config", "--local", "alias.pusht", aliasValue], {
+    cwd: root,
+  });
 } catch (e) {
   console.error(e);
   process.exit(1);
 }
-console.log("Installed. Use:  git pusht   (same as git push, then Trello when push succeeds).");
+console.log(
+  "Installed. Use:  git pusht   (same as git push, then Trello when push succeeds)!.",
+);
 console.log("Example:  git pusht origin main");
 process.exit(0);
