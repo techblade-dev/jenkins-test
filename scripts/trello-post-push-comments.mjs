@@ -93,11 +93,8 @@ async function addCommentToCard(key, token, shortLink, text) {
   );
   u.searchParams.set("key", key);
   u.searchParams.set("token", token);
-  const res = await fetch(u, {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({ text }),
-  });
+  u.searchParams.set("text", text);
+  const res = await fetch(u, { method: "POST" });
   if (!res.ok) {
     const errBody = await res.text();
     throw new Error(
@@ -106,17 +103,32 @@ async function addCommentToCard(key, token, shortLink, text) {
   }
 }
 
+function dbg(...a) {
+  if (process.env.TRELLO_DEBUG === "1") {
+    console.log("[trello-post-push]", ...a);
+  }
+}
+
 async function processPending(raw) {
   if (process.env.SKIP_TRELLO_POST === "1") {
+    dbg("SKIP_TRELLO_POST=1");
     return;
   }
 
   if (!raw.trim()) {
+    console.warn(
+      "[trello-post-push] No ref data (empty pending file). Pre-push may not have run, or stdin was empty.",
+    );
     return;
   }
 
+  dbg("pending lines:\n", raw);
+
   const branches = (process.env.TRELLO_POST_PUSH_BRANCHES || "").trim();
   if (!branches) {
+    console.warn(
+      "[trello-post-push] Add TRELLO_POST_PUSH_BRANCHES=main (comma-separated) to .env to post comments after push.",
+    );
     return;
   }
 
@@ -148,14 +160,40 @@ async function processPending(raw) {
   }
 
   const pushes = parsePushLines(raw);
+  if (pushes.length === 0) {
+    console.warn(
+      "[trello-post-push] Could not parse pre-push ref lines. Set TRELLO_DEBUG=1 to inspect.",
+    );
+    return;
+  }
+
   const seen = new Set();
+  let posted = 0;
+  let hadNewCommitsOnTrackedBranch = false;
+  let anyBranchMatched = false;
 
   for (const { localSha, remoteRef, remoteSha } of pushes) {
+    dbg("ref line remoteRef=", remoteRef, "localSha=", localSha?.slice(0, 7));
     if (!shouldPostForBranch(branches, remoteRef)) {
+      dbg(
+        "skip (not in TRELLO_POST_PUSH_BRANCHES):",
+        remoteRef,
+        "branches=",
+        branches,
+      );
       continue;
     }
+    anyBranchMatched = true;
     if (!localSha) continue;
     const shas = listCommitsForPush(localSha, remoteSha);
+    dbg("commits in push:", shas.length);
+    if (shas.length === 0) {
+      console.warn(
+        "[trello-post-push] No new commits for this ref (push may be \"already up to date\"). Nothing to post.",
+      );
+    } else {
+      hadNewCommitsOnTrackedBranch = true;
+    }
     for (const sha of shas) {
       if (seen.has(sha)) continue;
       seen.add(sha);
@@ -175,6 +213,7 @@ async function processPending(raw) {
       const text = `${line}— _${subject.replace(/"/g, "'")}_`;
       try {
         await addCommentToCard(key, token, shortLink, text);
+        posted += 1;
         console.log(`Trello: commented on card ${shortLink} (${short})`);
       } catch (e) {
         console.error(e.message);
@@ -183,6 +222,16 @@ async function processPending(raw) {
         }
       }
     }
+  }
+
+  if (posted === 0 && hadNewCommitsOnTrackedBranch) {
+    console.warn(
+      '[trello-post-push] 0 Trello comments posted. Fix API errors above, or use commit message "SHORTID - description" (Trello shortLink, 7–8 chars).',
+    );
+  } else if (!anyBranchMatched && branches) {
+    console.warn(
+      `[trello-post-push] No ref matched TRELLO_POST_PUSH_BRANCHES="${branches}". Pushed ref(s) must be refs/heads/<name> (e.g. main). Set TRELLO_DEBUG=1 to see what Git sent.`,
+    );
   }
 }
 

@@ -5,13 +5,24 @@
  *   npm run git:push -- [git push options…]
  */
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, unlinkSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = execFileSync("git", ["rev-parse", "--show-toplevel"], {
   encoding: "utf8",
 }).trim();
+
+const pendingPath = execFileSync(
+  "git",
+  ["-C", root, "rev-parse", "--git-path", "trello-pending-refs"],
+  { encoding: "utf8" },
+).trim();
+try {
+  unlinkSync(pendingPath);
+} catch {
+  /* no prior file */
+}
 
 const pushArgs = process.argv.slice(2);
 const r = spawnSync("git", ["push", ...pushArgs], {
@@ -27,11 +38,7 @@ if (r.status !== 0) {
   process.exit(r.status ?? 1);
 }
 
-const pending = execFileSync(
-  "git",
-  ["-C", root, "rev-parse", "--git-path", "trello-pending-refs"],
-  { encoding: "utf8" },
-).trim();
+const pending = pendingPath;
 
 if (!existsSync(pending)) {
   process.exit(0);
