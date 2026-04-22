@@ -1,5 +1,6 @@
 // Core Pipeline only: no NodeJS tool, Docker agent, AnsiColor, or readJSON plugins.
-// On Linux, downloads Node from nodejs.org into ~/.cache/jenkins-node if `node` is missing.
+// On Linux, downloads Node into ~/.cache/jenkins-node if `node` is missing.
+// If TLS/download fails: set job env HTTPS_PROXY, or NODEJS_DIST_BASE (same layout as nodejs.org/dist), or install Node on the agent.
 pipeline {
   agent any
 
@@ -56,9 +57,40 @@ pipeline {
 
           mkdir -p "${CACHE_ROOT}"
           cd "${CACHE_ROOT}"
-          if [ ! -f "${TAR}" ]; then
-            echo "Downloading ${TAR} ..."
-            curl -fsSLO "https://nodejs.org/dist/v${V}/${TAR}"
+          if [ ! -f "${TAR}" ] || [ ! -s "${TAR}" ]; then
+            rm -f "${TAR}"
+            BASE="${NODEJS_DIST_BASE:-https://nodejs.org/dist}"
+            URL="${BASE}/v${V}/${TAR}"
+            echo "Downloading ${TAR} from ${URL}"
+            ok=0
+            for attempt in 1 2 3 4 5; do
+              echo "Download attempt ${attempt}..."
+              if curl -fsSLO --connect-timeout 30 --max-time 900 --retry 3 --retry-delay 5 -4 --http1.1 \
+                --retry-connrefused \
+                "${URL}"; then
+                ok=1
+                break
+              fi
+              echo "curl failed (SSL or network), sleeping..."
+              sleep $((attempt * 5))
+            done
+            if [ "$ok" != 1 ]; then
+              echo "Retrying without forcing IPv4..."
+              if curl -fsSLO --connect-timeout 30 --max-time 900 --retry 3 --http1.1 --retry-connrefused "${URL}"; then
+                ok=1
+              fi
+            fi
+            if [ "$ok" != 1 ] || [ ! -s "${TAR}" ]; then
+              echo "Could not download Node. Options:"
+              echo "  - Set HTTPS_PROXY (and http_proxy) on the agent if a proxy is required"
+              echo "  - Set job env NODEJS_DIST_BASE to an internal mirror (same path layout as nodejs.org/dist)"
+              echo "  - Install Node on the agent and put it on PATH (Bootstrap will skip the download)"
+              exit 1
+            fi
+          fi
+          if ! tar -tzf "${TAR}" >/dev/null 2>&1; then
+            echo "Corrupt or incomplete ${TAR}, delete and retry: ${CACHE_ROOT}/${TAR}"
+            exit 1
           fi
           rm -rf "${NAME}"
           tar -xzf "${TAR}"
