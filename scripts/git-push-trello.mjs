@@ -41,10 +41,16 @@ if (r.status !== 0) {
 const pending = pendingPath;
 
 if (!existsSync(pending)) {
+  console.warn(
+    "[git:push] Missing .git/…/trello-pending-refs after push. Is core.hooksPath set? Pre-push should create this file.",
+  );
   process.exit(0);
 }
 const raw = readFileSync(pending, "utf8");
 if (!raw.trim()) {
+  console.warn(
+    '[git:push] trello-pending-refs is empty (nothing to push or push was "up to date"). Trello step skipped.',
+  );
   process.exit(0);
 }
 

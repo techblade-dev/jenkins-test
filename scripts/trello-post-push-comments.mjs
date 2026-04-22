@@ -59,7 +59,10 @@ function parsePushLines(data) {
   const lines = data.split("\n").filter((l) => l.trim().length);
   const out = [];
   for (const line of lines) {
-    const parts = line.trim().split(/\s+/);
+    const parts = line
+      .trim()
+      .split(/\s+/)
+      .map((p) => p.replace(/\r/g, "").trim());
     if (parts.length < 4) continue;
     const [localRef, localSha, remoteRef, remoteSha] = parts;
     out.push({ localRef, localSha, remoteRef, remoteSha });
