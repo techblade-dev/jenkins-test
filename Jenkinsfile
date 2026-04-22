@@ -1,6 +1,10 @@
 pipeline {
   agent any
 
+  environment {
+    HUSKY = '0'
+  }
+
   triggers {
     pollSCM('H/5 * * * *')
   }
@@ -19,23 +23,30 @@ pipeline {
       }
     }
 
-    stage('Debug') {
-      steps {
-        sh 'node -v'
-        sh 'npm -v'
-        sh 'ls -la'
+    stage('Node') {
+      agent {
+        docker {
+          image 'node:22-bookworm'
+        }
       }
-    }
+      stages {
+        stage('Debug') {
+          steps {
+            sh 'node -v && npm -v && ls -la'
+          }
+        }
 
-    stage('Install Dependencies') {
-      steps {
-        sh 'npm install'
-      }
-    }
+        stage('Install Dependencies') {
+          steps {
+            sh 'npm ci'
+          }
+        }
 
-    stage('Build') {
-      steps {
-        sh 'npm run build'
+        stage('Build') {
+          steps {
+            sh 'npm run build'
+          }
+        }
       }
     }
 
