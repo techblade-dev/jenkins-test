@@ -57,40 +57,55 @@ pipeline {
 
           mkdir -p "${CACHE_ROOT}"
           cd "${CACHE_ROOT}"
+          BASE="${NODEJS_DIST_BASE:-https://nodejs.org/dist}"
+          URL="${BASE}/v${V}/${TAR}"
+
+          # Drop stale or half-downloaded tarballs (from failed SSL / interrupted curl)
+          if [ -f "${TAR}" ] && [ -s "${TAR}" ]; then
+            if tar -tzf "${TAR}" >/dev/null 2>&1; then
+              echo "Using valid cached ${TAR}"
+            else
+              echo "Removing invalid/corrupt ${TAR} (e.g. partial download)"
+              rm -f "${TAR}"
+            fi
+          fi
+
           if [ ! -f "${TAR}" ] || [ ! -s "${TAR}" ]; then
-            rm -f "${TAR}"
-            BASE="${NODEJS_DIST_BASE:-https://nodejs.org/dist}"
-            URL="${BASE}/v${V}/${TAR}"
             echo "Downloading ${TAR} from ${URL}"
             ok=0
             for attempt in 1 2 3 4 5; do
               echo "Download attempt ${attempt}..."
+              rm -f "${TAR}"
               if curl -fsSLO --connect-timeout 30 --max-time 900 --retry 3 --retry-delay 5 -4 --http1.1 \
                 --retry-connrefused \
                 "${URL}"; then
-                ok=1
-                break
+                if tar -tzf "${TAR}" >/dev/null 2>&1; then
+                  ok=1
+                  break
+                fi
+                echo "Downloaded file failed integrity check, retrying..."
+              else
+                echo "curl failed (SSL or network), sleeping..."
+                sleep $((attempt * 5))
               fi
-              echo "curl failed (SSL or network), sleeping..."
-              sleep $((attempt * 5))
             done
             if [ "$ok" != 1 ]; then
               echo "Retrying without forcing IPv4..."
+              rm -f "${TAR}"
               if curl -fsSLO --connect-timeout 30 --max-time 900 --retry 3 --http1.1 --retry-connrefused "${URL}"; then
-                ok=1
+                if tar -tzf "${TAR}" >/dev/null 2>&1; then
+                  ok=1
+                fi
               fi
             fi
-            if [ "$ok" != 1 ] || [ ! -s "${TAR}" ]; then
-              echo "Could not download Node. Options:"
-              echo "  - Set HTTPS_PROXY (and http_proxy) on the agent if a proxy is required"
+            if [ "$ok" != 1 ] || [ ! -s "${TAR}" ] || ! tar -tzf "${TAR}" >/dev/null 2>&1; then
+              echo "Could not get a valid Node tarball. Options:"
+              echo "  - Manually delete bad cache: rm -f ${CACHE_ROOT}/${TAR}"
+              echo "  - Set HTTPS_PROXY / http_proxy on the agent if a proxy is required"
               echo "  - Set job env NODEJS_DIST_BASE to an internal mirror (same path layout as nodejs.org/dist)"
               echo "  - Install Node on the agent and put it on PATH (Bootstrap will skip the download)"
               exit 1
             fi
-          fi
-          if ! tar -tzf "${TAR}" >/dev/null 2>&1; then
-            echo "Corrupt or incomplete ${TAR}, delete and retry: ${CACHE_ROOT}/${TAR}"
-            exit 1
           fi
           rm -rf "${NAME}"
           tar -xzf "${TAR}"
