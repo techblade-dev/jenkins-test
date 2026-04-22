@@ -79,29 +79,58 @@ function branchNameFromRef(ref) {
 }
 
 function shouldPostForBranch(branches, remoteRef) {
-  if (!refIsBranch(remoteRef)) return false;
-  const name = branchNameFromRef(remoteRef);
   const set = new Set(
     branches
       .split(",")
       .map((b) => b.trim())
       .filter(Boolean),
   );
-  return set.has(name);
+  if (refIsBranch(remoteRef)) {
+    return set.has(branchNameFromRef(remoteRef));
+  }
+  const m = remoteRef && remoteRef.match(/^refs\/remotes\/[^/]+\/(.+)$/);
+  if (m) {
+    return set.has(m[1]);
+  }
+  return false;
 }
 
-async function addCommentToCard(key, token, shortLink, text) {
+/** GET card so we use the real id; comment POST wants form body per Trello docs. */
+async function getCardId(key, token, shortOrLong) {
   const u = new URL(
-    `https://api.trello.com/1/cards/${encodeURIComponent(shortLink)}/actions/comments`,
+    `https://api.trello.com/1/cards/${encodeURIComponent(shortOrLong)}`,
   );
   u.searchParams.set("key", key);
   u.searchParams.set("token", token);
-  u.searchParams.set("text", text);
-  const res = await fetch(u, { method: "POST" });
+  u.searchParams.set("fields", "id,shortLink");
+  const res = await fetch(u);
+  const body = await res.text();
+  if (!res.ok) {
+    throw new Error(
+      `Trello get card ${res.status} ${shortOrLong}: ${body.slice(0, 200)}`,
+    );
+  }
+  const j = JSON.parse(body);
+  if (!j || !j.id) {
+    throw new Error("Trello get card: missing id in response");
+  }
+  return j.id;
+}
+
+async function addCommentToCard(key, token, shortLink, text) {
+  const cardId = await getCardId(key, token, shortLink);
+  const u = new URL(
+    `https://api.trello.com/1/cards/${encodeURIComponent(cardId)}/actions/comments`,
+  );
+  const res = await fetch(u, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ key, token, text: text }).toString(),
+  });
   if (!res.ok) {
     const errBody = await res.text();
     throw new Error(
-      `Trello comment ${res.status} for card ${shortLink}: ${errBody.slice(0, 300)}`,
+      `Trello comment ${res.status} for card ${shortLink}: ${errBody.slice(0, 400)}`,
     );
   }
 }

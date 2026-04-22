@@ -29,8 +29,7 @@ export function loadDotenv() {
     } else {
       v = v.replace(/\s+#.*$/, "").trim();
     }
-    if (process.env[k] === undefined) {
-      process.env[k] = v;
-    }
+    // Always apply .env so local file wins over empty/phantom process.env (common on Windows).
+    process.env[k] = v;
   }
 }
