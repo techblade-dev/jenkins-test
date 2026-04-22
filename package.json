@@ -13,6 +13,8 @@
     "validate:commit": "node scripts/validate-commit-trello.mjs",
     "trello:post-push": "node scripts/trello-post-push-comments.mjs",
     "git:push": "node scripts/git-push-trello.mjs",
+    "trello:after-push": "node scripts/after-git-push.mjs",
+    "setup:git:pusht": "node scripts/install-git-pusht-alias.mjs",
     "trello:smoke": "node scripts/trello-smoke.mjs"
   },
   "dependencies": {

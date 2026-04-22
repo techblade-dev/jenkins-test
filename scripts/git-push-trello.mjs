@@ -5,9 +5,8 @@
  *   npm run git:push -- [git push options…]
  */
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, readFileSync, unlinkSync } from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { unlinkSync } from "node:fs";
+import { runTrelloAfterSuccessfulPush } from "./lib/runTrelloAfterSuccessfulPush.mjs";
 
 const root = execFileSync("git", ["rev-parse", "--show-toplevel"], {
   encoding: "utf8",
@@ -38,29 +37,4 @@ if (r.status !== 0) {
   process.exit(r.status ?? 1);
 }
 
-const pending = pendingPath;
-
-if (!existsSync(pending)) {
-  console.warn(
-    "[git:push] Missing .git/…/trello-pending-refs after push. Is core.hooksPath set? Pre-push should create this file.",
-  );
-  process.exit(0);
-}
-const raw = readFileSync(pending, "utf8");
-if (!raw.trim()) {
-  console.warn(
-    '[git:push] trello-pending-refs is empty (nothing to push or push was "up to date"). Trello step skipped.',
-  );
-  process.exit(0);
-}
-
-const trello = path.join(
-  path.dirname(fileURLToPath(import.meta.url)),
-  "trello-post-push-comments.mjs",
-);
-const t = spawnSync(process.execPath, [trello, pending], {
-  cwd: root,
-  stdio: "inherit",
-  env: process.env,
-});
-process.exit(t.status ?? 0);
+process.exit(runTrelloAfterSuccessfulPush());
